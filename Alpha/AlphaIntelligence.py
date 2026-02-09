@@ -21,7 +21,7 @@ ALLOW_UNICODE = True
 # Core parameters
 DECAY_RATE = 0.9
 SIMILARITY_K = 10.0
-MAX_HISTORY = 100
+MAX_HISTORY = float("inf")  # 무제한 기록
 MIN_SIGNAL_THRESHOLD = 1e-10
 INITIAL_SIGNAL_STRENGTH = 1.0
 
@@ -326,14 +326,17 @@ def parse_dialog(raw_text):
     return dialog
 
 
-def learn_from_csv(file_path):
-    """CSV 파일에서 학습"""
-    # 절대 경로 변환
+def learn_from_csv(file_path, max_dialogs=None):
+    """CSV 파일에서 학습
+
+    Args:
+        file_path: CSV 파일 경로
+        max_dialogs: 학습할 최대 대화 개수 (None이면 전체)
+    """
     if not os.path.isabs(file_path):
         base_dir = os.path.dirname(os.path.dirname(__file__))
         file_path = os.path.normpath(os.path.join(base_dir, file_path))
 
-    # 폴더인지 확인
     if os.path.isdir(file_path):
         print(f"❌ 폴더 경로입니다: {file_path}")
         candidates = [f for f in os.listdir(file_path) if f.lower().endswith(".csv")]
@@ -343,12 +346,12 @@ def learn_from_csv(file_path):
                 print(f"  - {c}")
         return
 
-    # 파일 존재 확인
     if not os.path.isfile(file_path):
         print(f"❌ 파일 없음: {file_path}")
         return
 
-    print(f"📂 CSV 학습 시작: {os.path.basename(file_path)}\n")
+    limit_text = f"{max_dialogs}개" if max_dialogs else "전체"
+    print(f"📂 CSV 학습 시작: {os.path.basename(file_path)} ({limit_text})\n")
 
     with open(file_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
@@ -358,6 +361,11 @@ def learn_from_csv(file_path):
         error_count = 0
 
         for row_index, row in enumerate(reader, 1):
+            # 최대 개수 제한
+            if max_dialogs and total_learned >= max_dialogs:
+                print(f"\n⏸️ {max_dialogs}개 대화 학습 완료, 중단")
+                break
+
             raw = row.get("dialog", "")
             if not raw:
                 continue
@@ -367,7 +375,7 @@ def learn_from_csv(file_path):
             if len(dialog) < 2:
                 continue
 
-            # 첫 3개 대화 샘플 출력
+            # 첫 3개 샘플
             if row_index <= 3:
                 print(f"행 {row_index}: {len(dialog)}개 턴")
                 for i, turn in enumerate(dialog[:3], 1):
@@ -375,9 +383,11 @@ def learn_from_csv(file_path):
                     print(f"  턴{i}: {preview}")
                 print()
 
+            if row_index == 4:
+                print("📖 학습 시작...\n")
+
             reset_all_layers()
 
-            # 연속 턴을 Q-A 쌍으로 학습
             for i in range(len(dialog) - 1):
                 q = dialog[i]
                 a = dialog[i + 1]
@@ -392,9 +402,15 @@ def learn_from_csv(file_path):
 
             total_learned += 1
 
-            # 진행률 표시 (500행마다)
-            if row_index % 500 == 0:
-                print(f"진행: {row_index}행, {total_pairs}쌍, 오류 {error_count}개")
+            # 진행률 표시
+            if total_learned % 10 == 0:
+                if max_dialogs:
+                    percent = int((total_learned / max_dialogs) * 100)
+                    print(
+                        f"[{total_learned}/{max_dialogs}] {percent}% - {total_pairs}쌍 학습 완료"
+                    )
+                else:
+                    print(f"[{total_learned}개] {total_pairs}쌍 학습 완료")
 
             reset_all_layers()
 
@@ -402,12 +418,7 @@ def learn_from_csv(file_path):
         print(f"  - 대화: {total_learned}개")
         print(f"  - Q-A 쌍: {total_pairs}개")
         print(f"  - 오류: {error_count}개")
-        print(f"  - 학습된 문자 종류: {len(input_layers)}개")
-
-
-# ============================================================================
-# COMMAND LINE INTERFACE
-# ============================================================================
+        print(f"  - 문자 종류: {len(input_layers)}개")
 
 
 def main():
@@ -415,12 +426,16 @@ def main():
     print("AlphaIntelligence - Trace-Based AI")
     print("=" * 60)
     print("Commands:")
-    print("  learn <question> <answer>  - Learn Q&A pair")
-    print("  learncsv <file.csv>       - Learn from CSV file")
-    print("  stimulate <question>       - Generate response")
-    print("  reset                      - Reset all layers")
-    print("  stats                      - Show statistics")
-    print("  exit                       - Exit program")
+    print("  learn <question> <answer>     - Learn Q&A pair")
+    print("  learncsv <file.csv> [count]   - Learn from CSV (optional count)")
+    print("  stimulate <question>          - Generate response")
+    print("  reset                         - Reset all layers")
+    print("  stats                         - Show statistics")
+    print("  exit                          - Exit program")
+    print("=" * 60)
+    print("\nExamples:")
+    print("  learncsv train.csv 100        - Learn first 100 dialogs")
+    print("  learncsv train.csv            - Learn all dialogs")
     print("=" * 60)
 
     running = True
@@ -442,12 +457,10 @@ def main():
                     question = parts[1]
                     reset_all_layers()
 
-                    # Question 입력
                     for char in question:
                         stimulate(char)
                         step_all_layers()
 
-                    # 응답 생성
                     generate_response()
                 else:
                     print("Usage: stimulate <question>")
@@ -463,12 +476,25 @@ def main():
                     print("Usage: learn <question> <answer>")
 
             elif cmd.startswith("learncsv "):
-                parts = cmd.split(" ", 1)
-                if len(parts) == 2:
+                parts = cmd.split()
+                if len(parts) >= 2:
                     file_path = parts[1]
-                    learn_from_csv(file_path)
+                    max_dialogs = None
+
+                    # 개수 파라미터 확인
+                    if len(parts) == 3:
+                        try:
+                            max_dialogs = int(parts[2])
+                            if max_dialogs <= 0:
+                                print("❌ 개수는 양수여야 합니다")
+                                continue
+                        except ValueError:
+                            print("❌ 개수는 정수여야 합니다")
+                            continue
+
+                    learn_from_csv(file_path, max_dialogs)
                 else:
-                    print("Usage: learncsv <file.csv>")
+                    print("Usage: learncsv <file.csv> [count]")
 
             elif cmd == "reset":
                 reset_all_layers()
@@ -480,7 +506,6 @@ def main():
                 print(f"  - OutputLayers: {len(output_layers)}")
                 print(f"  - StateLayers: {len(state_layers)}")
 
-                # 커넥터 히스토리 통계
                 total_history = 0
                 for layer in input_layers.values():
                     for conn in layer.connections:
