@@ -1,5 +1,7 @@
 import math
 import csv
+import re
+import os
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
@@ -13,16 +15,15 @@ SPECIAL_CHARS = " .,!?;:'\"()[]{}<>@#$%^&*-_=+|\\/`~"
 LETTERS = ALPHABET + ALPHABET_CAP + DIGITS + SPECIAL_CHARS
 END_TOKEN = "<END>"
 
+# 유니코드 지원 (한글, 중국어 등)
+ALLOW_UNICODE = True
+
 # Core parameters
-DECAY_RATE = 0.9  # 망각 상수 (signal decay per step)
-SIMILARITY_K = 10.0  # 최대 거리 함수 (유사도 계산 상수)
-MAX_HISTORY = 100  # 최대 Connector 히스토리 개수
-
-# Signal thresholds
-MIN_SIGNAL_THRESHOLD = 1e-10  # 최소 신호 강도 (이보다 약하면 무시)
-
-# Learning constants
-INITIAL_SIGNAL_STRENGTH = 1.0  # 초기 신호 강도
+DECAY_RATE = 0.9
+SIMILARITY_K = 10.0
+MAX_HISTORY = 100
+MIN_SIGNAL_THRESHOLD = 1e-10
+INITIAL_SIGNAL_STRENGTH = 1.0
 
 
 # ============================================================================
@@ -31,63 +32,49 @@ INITIAL_SIGNAL_STRENGTH = 1.0  # 초기 신호 강도
 
 
 class InputLayer:
-    """입력 레이어: 사용자에게 들은 것"""
-
-    __slots__ = ("char", "signal", "connections")  # 메모리 최적화
+    __slots__ = ("char", "signal", "connections")
 
     def __init__(self, char, output_layer_ids):
         self.char = char
         self.signal = 0.0
-        # Connector 리스트 사전 할당
         self.connections = [Connector(oid) for oid in output_layer_ids]
 
     def step(self):
-        """신호 감쇠"""
         self.signal *= DECAY_RATE
 
     def fire(self, output_layers, state_layers):
-        """신호 전달 (최적화: 리스트 순회)"""
         for conn in self.connections:
             conn.transmit(self.signal, output_layers, state_layers)
 
     def receive(self, amount):
-        """신호 수신 (inplace 연산)"""
         self.signal += amount
 
 
 class OutputLayer:
-    """출력 레이어: 말할까? 라고 생각한 것"""
-
-    __slots__ = ("char", "signal")  # 메모리 최적화
+    __slots__ = ("char", "signal")
 
     def __init__(self, char):
         self.char = char
         self.signal = 0.0
 
     def step(self):
-        """신호 감쇠"""
         self.signal *= DECAY_RATE
 
     def receive(self, amount):
-        """신호 수신 (inplace 연산)"""
         self.signal += amount
 
 
 class StateLayer:
-    """상태 레이어: 내가 말한 것을 내가 들은 것"""
-
-    __slots__ = ("char", "signal")  # 메모리 최적화
+    __slots__ = ("char", "signal")
 
     def __init__(self, char):
         self.char = char
         self.signal = 0.0
 
     def step(self):
-        """신호 감쇠"""
         self.signal *= DECAY_RATE
 
     def receive(self, amount):
-        """신호 수신 (inplace 연산)"""
         self.signal += amount
 
 
@@ -97,20 +84,16 @@ class StateLayer:
 
 
 class Connector:
-    """InputLayer와 OutputLayer를 연결하는 커넥터"""
-
-    __slots__ = ("output_layer_id", "history")  # 메모리 최적화
+    __slots__ = ("output_layer_id", "history")
 
     def __init__(self, output_layer_id):
         self.output_layer_id = output_layer_id
-        self.history = []  # [(signal, state_snapshot), ...]
+        self.history = []
 
     def transmit(self, signal, output_layers, state_layers):
-        """신호 전달 (유사도 기반 가중치 적용)"""
         if not self.history:
             return
 
-        # 최적화: 지역 변수로 참조 저장
         history = self.history
         k = SIMILARITY_K
 
@@ -140,22 +123,18 @@ class Connector:
         else:
             weight2 = 1.0
 
-        # 최종 가중치 (기하평균)
+        # 최종 가중치
         final_weight = math.sqrt(weight1 * weight2)
+        weighted_signal = signal * final_weight
 
         # 신호 전송
-        weighted_signal = signal * final_weight
-        output_layers[self.output_layer_id].receive(weighted_signal)
+        if self.output_layer_id in output_layers:
+            output_layers[self.output_layer_id].receive(weighted_signal)
 
     def learn(self, signal, state_layers):
-        """학습: history에 (신호, StateLayer 스냅샷) 저장"""
-        # StateLayer 스냅샷 생성 (최적화: dict comprehension)
         state_snapshot = {char: layer.signal for char, layer in state_layers.items()}
-
-        # History 추가
         self.history.append((signal, state_snapshot))
 
-        # History 크기 제한
         if len(self.history) > MAX_HISTORY:
             self.history.pop(0)
 
@@ -164,10 +143,8 @@ class Connector:
 # GLOBAL LAYER INITIALIZATION
 # ============================================================================
 
-# 전체 문자 집합 (알파벳 + END 토큰)
 ALL_CHARS = list(LETTERS) + [END_TOKEN]
 
-# 레이어 생성 (최적화: dict comprehension)
 output_layers = {char: OutputLayer(char) for char in ALL_CHARS}
 input_layers = {char: InputLayer(char, ALL_CHARS) for char in ALL_CHARS}
 state_layers = {char: StateLayer(char) for char in ALL_CHARS}
@@ -179,7 +156,6 @@ state_layers = {char: StateLayer(char) for char in ALL_CHARS}
 
 
 def step_all_layers():
-    """모든 레이어의 step() 호출 (최적화: 한 번의 순회)"""
     for layer in input_layers.values():
         layer.step()
     for layer in output_layers.values():
@@ -189,14 +165,12 @@ def step_all_layers():
 
 
 def stimulate(char, strength=INITIAL_SIGNAL_STRENGTH):
-    """InputLayer 자극"""
     layer = input_layers.get(char)
     if layer:
         layer.receive(strength)
 
 
 def reset_all_layers():
-    """모든 레이어 초기화"""
     for layer in input_layers.values():
         layer.signal = 0.0
     for layer in output_layers.values():
@@ -206,14 +180,12 @@ def reset_all_layers():
 
 
 def tokenize(text):
-    """문자열을 개별 문자와 END 토큰으로 분리"""
     tokens = []
     i = 0
     text_len = len(text)
     end_len = len(END_TOKEN)
 
     while i < text_len:
-        # END 토큰 확인
         if text[i : i + end_len] == END_TOKEN:
             tokens.append(END_TOKEN)
             i += end_len
@@ -225,7 +197,6 @@ def tokenize(text):
 
 
 def find_strongest_output():
-    """OutputLayer에서 가장 강한 신호를 가진 문자 찾기"""
     strongest_char = None
     max_signal = -1.0
 
@@ -242,85 +213,196 @@ def find_strongest_output():
 # ============================================================================
 
 
-def generate_response():
-    """응답 생성 (출력 순서도)"""
-    while True:
+def generate_response(max_length=200):
+    """응답 생성"""
+    output_text = []
+
+    for _ in range(max_length):
         # OutputLayer 초기화
         for layer in output_layers.values():
             layer.signal = 0.0
 
-        # 전체 InputLayer fire
+        # InputLayer fire
         for layer in input_layers.values():
             layer.fire(output_layers, state_layers)
 
-        # 가장 강한 출력 찾기
         strongest_char, max_signal = find_strongest_output()
-
-        # 출력
-        print(f"Strongest Output: ('{strongest_char}', {max_signal})")
 
         # 신호가 너무 약하면 종료
         if max_signal < MIN_SIGNAL_THRESHOLD:
-            print("신호가 너무 약해서 종료합니다.")
             break
 
         # END 토큰이면 종료
         if strongest_char == END_TOKEN:
             break
 
-        # StateLayer에 출력한 문자 자극
-        state_layers[strongest_char].receive(INITIAL_SIGNAL_STRENGTH)
+        output_text.append(strongest_char)
 
-        # Step
+        # StateLayer에 자극
+        if strongest_char in state_layers:
+            state_layers[strongest_char].receive(INITIAL_SIGNAL_STRENGTH)
+
         step_all_layers()
+
+    result = "".join(output_text)
+    print(f"Response: {result}")
+    return result
 
 
 def learn(question, answer):
-    """학습 (학습 순서도)"""
-    # Answer 토큰화 + END 토큰 추가
+    """학습 - 동적 레이어 생성 지원"""
     answer_tokens = tokenize(answer) + [END_TOKEN]
 
-    # Q의 각 char을 step을 호출하면서 Input
+    # 1단계: Question 입력
     for char in question:
-        layer = input_layers.get(char)
-        if layer:
-            layer.receive(INITIAL_SIGNAL_STRENGTH)
-            step_all_layers()
+        # 새로운 문자면 동적 생성
+        if char not in input_layers:
+            if not ALLOW_UNICODE:
+                continue
 
-    # For each character in A
+            # InputLayer 생성
+            input_layers[char] = InputLayer(char, list(output_layers.keys()))
+
+            # StateLayer 생성
+            if char not in state_layers:
+                state_layers[char] = StateLayer(char)
+
+        layer = input_layers[char]
+        layer.receive(INITIAL_SIGNAL_STRENGTH)
+        step_all_layers()
+
+    # 2단계: Answer 학습
     for achar in answer_tokens:
-        # Q의 각 char에서 achar로 가는 커넥터 학습
+        # OutputLayer 동적 생성
+        if achar not in output_layers:
+            if not ALLOW_UNICODE and achar != END_TOKEN:
+                continue
+
+            output_layers[achar] = OutputLayer(achar)
+
+            # StateLayer 생성
+            if achar not in state_layers:
+                state_layers[achar] = StateLayer(achar)
+
+            # 기존 InputLayer에 새 커넥터 추가
+            for ilayer in input_layers.values():
+                ilayer.connections.append(Connector(achar))
+
+        # Question의 각 문자에서 Answer 문자로 학습
         for char in question:
-            layer = input_layers.get(char)
-            if layer:
-                for conn in layer.connections:
-                    if conn.output_layer_id == achar:
-                        conn.learn(layer.signal, state_layers)
+            if char not in input_layers:
+                continue
 
-        # StateLayer에 achar 자극
-        state_layers[achar].receive(INITIAL_SIGNAL_STRENGTH)
+            layer = input_layers[char]
 
-        # Step
+            # 해당 OutputLayer로 가는 커넥터 찾아서 학습
+            for conn in layer.connections:
+                if conn.output_layer_id == achar:
+                    conn.learn(layer.signal, state_layers)
+                    break
+
+        # StateLayer 자극
+        if achar in state_layers:
+            state_layers[achar].receive(INITIAL_SIGNAL_STRENGTH)
+
         step_all_layers()
 
 
+def parse_dialog(raw_text):
+    """따옴표로 묶인 발화 추출"""
+    pattern = r"'([^']+)'|\"([^\"]+)\""
+    matches = re.findall(pattern, raw_text)
+
+    if not matches:
+        return []
+
+    dialog = []
+    for match in matches:
+        text = match[0] if match[0] else match[1]
+        text = text.strip()
+        if text:
+            dialog.append(text)
+
+    return dialog
+
+
 def learn_from_csv(file_path):
+    """CSV 파일에서 학습"""
+    # 절대 경로 변환
+    if not os.path.isabs(file_path):
+        base_dir = os.path.dirname(os.path.dirname(__file__))
+        file_path = os.path.normpath(os.path.join(base_dir, file_path))
+
+    # 폴더인지 확인
+    if os.path.isdir(file_path):
+        print(f"❌ 폴더 경로입니다: {file_path}")
+        candidates = [f for f in os.listdir(file_path) if f.lower().endswith(".csv")]
+        if candidates:
+            print("사용 가능한 CSV:")
+            for c in candidates:
+                print(f"  - {c}")
+        return
+
+    # 파일 존재 확인
+    if not os.path.isfile(file_path):
+        print(f"❌ 파일 없음: {file_path}")
+        return
+
+    print(f"📂 CSV 학습 시작: {os.path.basename(file_path)}\n")
+
     with open(file_path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            dialog = ast.literal_eval(row["dialog"])
 
-            reset_all_layers()  # 대화 시작
+        total_learned = 0
+        total_pairs = 0
+        error_count = 0
 
+        for row_index, row in enumerate(reader, 1):
+            raw = row.get("dialog", "")
+            if not raw:
+                continue
+
+            dialog = parse_dialog(raw)
+
+            if len(dialog) < 2:
+                continue
+
+            # 첫 3개 대화 샘플 출력
+            if row_index <= 3:
+                print(f"행 {row_index}: {len(dialog)}개 턴")
+                for i, turn in enumerate(dialog[:3], 1):
+                    preview = turn[:60] + "..." if len(turn) > 60 else turn
+                    print(f"  턴{i}: {preview}")
+                print()
+
+            reset_all_layers()
+
+            # 연속 턴을 Q-A 쌍으로 학습
             for i in range(len(dialog) - 1):
-                q = dialog[i].strip()
-                a = dialog[i + 1].strip()
+                q = dialog[i]
+                a = dialog[i + 1]
 
-                learn(q, a)
-                if (i + 1) / (len(dialog) - 1) >= 0.1:  # 10%마다 진행 상황 출력
-                    print(f"{(i+1)/(len(dialog)-1) * 100}%")
+                try:
+                    learn(q, a)
+                    total_pairs += 1
+                except Exception as e:
+                    error_count += 1
+                    if error_count <= 5:
+                        print(f"⚠️ 학습 오류 (행{row_index}): {str(e)[:50]}")
 
-            reset_all_layers()  # 대화 종료
+            total_learned += 1
+
+            # 진행률 표시 (500행마다)
+            if row_index % 500 == 0:
+                print(f"진행: {row_index}행, {total_pairs}쌍, 오류 {error_count}개")
+
+            reset_all_layers()
+
+        print(f"\n✅ 학습 완료")
+        print(f"  - 대화: {total_learned}개")
+        print(f"  - Q-A 쌍: {total_pairs}개")
+        print(f"  - 오류: {error_count}개")
+        print(f"  - 학습된 문자 종류: {len(input_layers)}개")
 
 
 # ============================================================================
@@ -329,15 +411,15 @@ def learn_from_csv(file_path):
 
 
 def main():
-    """메인 루프"""
     print("=" * 60)
     print("AlphaIntelligence - Trace-Based AI")
     print("=" * 60)
     print("Commands:")
     print("  learn <question> <answer>  - Learn Q&A pair")
-    print("  learncsv <file.csv>       - Learn Q&A pairs from CSV file")
+    print("  learncsv <file.csv>       - Learn from CSV file")
     print("  stimulate <question>       - Generate response")
     print("  reset                      - Reset all layers")
+    print("  stats                      - Show statistics")
     print("  exit                       - Exit program")
     print("=" * 60)
 
@@ -345,7 +427,7 @@ def main():
 
     while running:
         try:
-            cmd = input(">>> ").strip()
+            cmd = input("\n>>> ").strip()
 
             if not cmd:
                 continue
@@ -358,27 +440,30 @@ def main():
                 parts = cmd.split(" ", 1)
                 if len(parts) == 2:
                     question = parts[1]
-                    # Q의 각 char을 step을 호출하면서 Input
+                    reset_all_layers()
+
+                    # Question 입력
                     for char in question:
                         stimulate(char)
                         step_all_layers()
+
                     # 응답 생성
                     generate_response()
                 else:
                     print("Usage: stimulate <question>")
 
             elif cmd.startswith("learn "):
-                parts = cmd.split(" ")
+                parts = cmd.split(" ", maxsplit=2)
                 if len(parts) == 3:
                     question = parts[1]
                     answer = parts[2]
                     learn(question, answer)
-                    print(f"Learned: {question} -> {answer}")
+                    print(f"✅ Learned: {question} -> {answer}")
                 else:
                     print("Usage: learn <question> <answer>")
 
             elif cmd.startswith("learncsv "):
-                parts = cmd.split(" ")
+                parts = cmd.split(" ", 1)
                 if len(parts) == 2:
                     file_path = parts[1]
                     learn_from_csv(file_path)
@@ -387,16 +472,34 @@ def main():
 
             elif cmd == "reset":
                 reset_all_layers()
-                print("All layers have been reset.")
+                print("✅ All layers reset")
+
+            elif cmd == "stats":
+                print(f"\n📊 Statistics:")
+                print(f"  - InputLayers: {len(input_layers)}")
+                print(f"  - OutputLayers: {len(output_layers)}")
+                print(f"  - StateLayers: {len(state_layers)}")
+
+                # 커넥터 히스토리 통계
+                total_history = 0
+                for layer in input_layers.values():
+                    for conn in layer.connections:
+                        total_history += len(conn.history)
+
+                print(f"  - Total connection histories: {total_history}")
+                print(f"  - Unicode support: {'ON' if ALLOW_UNICODE else 'OFF'}")
 
             else:
-                print("Unknown command. Type 'exit' to quit.")
+                print("❌ Unknown command")
 
         except KeyboardInterrupt:
             print("\nGoodbye!")
             running = False
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
 
 
 # ============================================================================
