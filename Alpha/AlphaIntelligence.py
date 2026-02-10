@@ -455,8 +455,6 @@ def main():
                 parts = cmd.split(" ", 1)
                 if len(parts) == 2:
                     question = parts[1]
-                    reset_all_layers()
-
                     for char in question:
                         stimulate(char)
                         step_all_layers()
