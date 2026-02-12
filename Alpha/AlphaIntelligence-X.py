@@ -22,14 +22,14 @@ ALLOW_UNICODE = True
 
 # Core parameters
 DECAY_RATE = 0.9
-STATE_DECAY_RATE = 0.0
+STATE_DECAY_RATE = 0.3
 SIMILARITY_K = 20
 MAX_HISTORY = float("inf")
 MIN_SIGNAL_THRESHOLD = 0.0
 INITIAL_SIGNAL_STRENGTH = 5.0
 
 # State weight 조절
-STATE_INFLUENCE = 0.0  # State 영향력 (0~1)
+STATE_INFLUENCE = 0.5  # State 영향력 (0~1)
 
 AUTO = False
 
