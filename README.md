@@ -12,7 +12,7 @@ AlphaIntelligence는 문자 단위 신호 기반 텍스트 생성 모델입니�
 - 입력 신호와 상태 신호 감쇠 기반 동작  
 - 과거 사례 기반 메모리 학습으로 환각 최소화  
 - CSV 대화 데이터 학습 가능  
-- 모델 저장 및 압축 지원 (lzma, bz2, gzip)  
+- 모델 저장 및 압축 지원 (lzma, bz2, gzip, none)  
 
 ---
 
@@ -49,7 +49,7 @@ AlphaIntelligence는 문자 단위 신호 기반 텍스트 생성 모델입니�
 
 - `<END>` 토큰 도달  
 - 신호가 임계값 이하  
-- 반복 출력 감지  
+- 반복 출력 감지 (동일 문자 3회 이상 연속)
 
 ---
 
@@ -81,6 +81,8 @@ AlphaIntelligence는 문자 단위 신호 기반 텍스트 생성 모델입니�
 - `SIMILARITY_K`: 유사도 계산 기준  
 - `STATE_INFLUENCE`: 상태 영향력  
 - `INITIAL_SIGNAL_STRENGTH`: 초기 자극 신호  
+- `MIN_SIGNAL_THRESHOLD`: 신호 최소값 기준  
+- `MAX_HISTORY`: Connector 히스토리 최대 길이  
 
 > 설정 값 변경으로 출력 다양성과 반복 제어 가능
 
@@ -100,6 +102,7 @@ AlphaIntelligence는 문자 단위 신호 기반 텍스트 생성 모델입니�
 - 반복 출력 가능  
 - 데이터가 늘어나면 메모리 사용량 증가  
 - 확률 기반 샘플링 미지원  
+- 유니코드 사용 여부는 `ALLOW_UNICODE` 설정에 의존  
 
 ---
 
