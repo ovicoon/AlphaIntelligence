@@ -7,11 +7,16 @@ import re
 import sys
 import bisect
 import pickle
+import gzip
+import bz2
+import lzma
 from datetime import datetime
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
+
+VERSION = "3.7-compressed"
 
 ALPHABET = "abcdefghijklmnopqrstuvwxyz"
 ALPHABET_CAP = ALPHABET.upper()
@@ -384,10 +389,12 @@ class AlphaIntelligence:
 
         return "".join(output_text)
 
-    def save(self, filepath):
-        """Save model"""
+    def save(self, filepath, compression="lzma"):
+        """
+        compression: "gzip", "bz2", "lzma", None
+        """
         save_data = {
-            "version": "3.3",
+            "version": "3.8",
             "config": {
                 "DECAY_RATE": DECAY_RATE,
                 "STATE_DECAY_RATE": STATE_DECAY_RATE,
@@ -399,20 +406,66 @@ class AlphaIntelligence:
             "state_layers": self.state_layers,
         }
 
-        with open(filepath, "wb") as f:
-            pickle.dump(save_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        # 압축 방식별 저장
+        if compression == "lzma":
+            if not filepath.endswith(".xz"):
+                filepath += ".xz"
+            # LZMA 최대 압축
+            with lzma.open(filepath, "wb", preset=9) as f:
+                pickle.dump(save_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        elif compression == "bz2":
+            if not filepath.endswith(".bz2"):
+                filepath += ".bz2"
+            with bz2.open(filepath, "wb", compresslevel=9) as f:
+                pickle.dump(save_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        elif compression == "gzip":
+            if not filepath.endswith(".gz"):
+                filepath += ".gz"
+            with gzip.open(filepath, "wb", compresslevel=9) as f:
+                pickle.dump(save_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        else:
+            # 압축 없음
+            with open(filepath, "wb") as f:
+                pickle.dump(save_data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
         file_size = os.path.getsize(filepath) / (1024 * 1024)
-        print(f"✅ 저장: {filepath} ({file_size:.2f} MB)")
+        print(f"✅ 저장: {filepath} ({file_size:.2f} MB, {compression or 'none'})")
 
     @classmethod
     def load(cls, filepath):
-        """Load model"""
+        """자동 압축 감지"""
+        # 파일 찾기
         if not os.path.exists(filepath):
-            raise FileNotFoundError(f"파일 없음: {filepath}")
+            for ext in [".xz", ".gz", ".bz2"]:
+                if os.path.exists(filepath + ext):
+                    filepath += ext
+                    break
+            else:
+                raise FileNotFoundError(f"파일 없음: {filepath}")
 
-        with open(filepath, "rb") as f:
-            save_data = pickle.load(f)
+        # 확장자로 압축 방식 감지
+        if filepath.endswith(".xz") or filepath.endswith(".lzma"):
+            with lzma.open(filepath, "rb") as f:
+                save_data = pickle.load(f)
+            comp_type = "lzma"
+
+        elif filepath.endswith(".bz2"):
+            with bz2.open(filepath, "rb") as f:
+                save_data = pickle.load(f)
+            comp_type = "bz2"
+
+        elif filepath.endswith(".gz"):
+            with gzip.open(filepath, "rb") as f:
+                save_data = pickle.load(f)
+            comp_type = "gzip"
+
+        else:
+            with open(filepath, "rb") as f:
+                save_data = pickle.load(f)
+            comp_type = "none"
 
         model = cls.__new__(cls)
         model.output_layers = save_data["output_layers"]
@@ -421,7 +474,7 @@ class AlphaIntelligence:
         model._rebuild_caches()
 
         file_size = os.path.getsize(filepath) / (1024 * 1024)
-        print(f"✅ 로드: {filepath} ({file_size:.2f} MB)")
+        print(f"✅ 로드: {filepath} ({file_size:.2f} MB, {comp_type})")
         print(f"   문자: {len(model.input_layers)}개")
 
         return model
@@ -558,15 +611,14 @@ def learn_from_csv(model, file_path, max_dialogs=None):
 
 def main():
     print("=" * 60)
-    print("AlphaIntelligence v3.3 - Pure Python")
-    print("🚀 No NumPy + Fixed State Matching")
+    print(VERSION)
     print("=" * 60)
     print("Commands:")
     print('  learn "Q" "A"')
     print("  learncsv <file.csv> [count]")
     print('  stimulate "Q"')
-    print("  save <file.pkl>")
-    print("  load <file.pkl>")
+    print("  save <file.gzip>")
+    print("  load <file.gzip>")
     print("  reset")
     print("  stats")
     print("  exit")
@@ -577,7 +629,7 @@ def main():
 
     while running:
         try:
-            cmd = input("\n>>> ").strip()
+            cmd = input("\n>>>").strip()
 
             if not cmd:
                 continue
@@ -628,8 +680,15 @@ def main():
 
             elif cmd.startswith("save "):
                 parts = cmd.split()
-                if len(parts) == 2:
-                    model.save(parts[1])
+                if len(parts) >= 2:
+                    filepath = parts[1]
+                    compression = parts[2] if len(parts) >= 3 else "gzip"
+
+                    if compression not in ["gzip", "bz2", "lzma", "none"]:
+                        print("❌ compression: gzip, bz2, lzma, none")
+                        continue
+
+                    model.save(filepath, compression)
 
             elif cmd.startswith("load "):
                 parts = cmd.split()
